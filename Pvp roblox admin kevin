@@ -1,0 +1,581 @@
+-- ==============================================
+-- DinhThanhBinh | KEVIN RAINBOW HUB
+-- SPEED CHẠY ĐÚNG + HITBOX TÍNH DAME
+-- AIM: Đầu / Thân / Chân / Kính Đầu / Kính Thân / Kính Chân
+-- ==============================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+local Character, Humanoid, RootPart, Tool = nil, nil, nil, nil
+local originalWalkSpeed = 16
+local originalJumpPower = 50
+local speedActive = false
+
+-- ⚙️ CẤU HÌNH
+local Config = {
+    SpeedEnabled = false,
+    WalkSpeed = 95,
+    VelocityBoost = 40,
+    AntiKick = true,
+    MaxSafeSpeed = 120,
+    JumpPower = 180,
+
+    AimEnabled = false,
+    AimMode = "Head",
+    AimSmooth = 0.25,
+    AimRange = 130,
+    AimKey = Enum.KeyCode.LeftAlt,
+
+    AutoAttack = false,
+    EnemyHitbox = false,
+    HitboxSize = Vector3.new(6, 12, 6),
+    HitboxOffset = Vector3.new(0, 0, 0),
+    HitboxTransparency = 0.8,
+    BoxColor = Color3.new(1, 0.25, 0.25),
+    BoxLineThickness = 0.06,
+
+    AutoHeal = false,
+    HealKey = Enum.KeyCode.One,
+    HealThreshold = 90,
+    HealDelay = 1.8,
+    CheckHealItem = false,
+    HealItemNames = {"băng", "gạt", "heal", "hp", "y tế", "thuốc", "chữa", "bandage", "medkit", "potion"},
+
+    Spin = false,
+    SpinSpeed = 2500,
+    HealthBar = false
+}
+
+-- ✅ Khởi tạo nhân vật
+local function SetupChar()
+    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    Humanoid = Character:WaitForChild("Humanoid", 5)
+    RootPart = Character:WaitForChild("HumanoidRootPart", 5)
+    Tool = Character:FindFirstChildOfClass("Tool") or Character:FindFirstChildWhichIsA("Tool", true) or nil
+    originalWalkSpeed = Humanoid.WalkSpeed
+    originalJumpPower = Humanoid.JumpPower
+    speedActive = false
+end
+
+SetupChar()
+LocalPlayer.CharacterAdded:Connect(function() task.wait(0.2) SetupChar() end)
+LocalPlayer.CharacterRemoving:Connect(function() Character, Humanoid, RootPart, Tool = nil, nil, nil, nil end)
+
+-- ==============================================
+-- ✅ SPEED + VELOCITY
+-- ==============================================
+RunService.Heartbeat:Connect(function(dt)
+    if not Humanoid or not RootPart or Humanoid.Health <= 0 then return end
+
+    if Config.SpeedEnabled then
+        speedActive = true
+        local targetSpeed = math.min(Config.WalkSpeed, Config.MaxSafeSpeed)
+        pcall(function()
+            if Humanoid.WalkSpeed ~= targetSpeed then Humanoid.WalkSpeed = targetSpeed end
+            if Humanoid.JumpPower ~= Config.JumpPower then Humanoid.JumpPower = Config.JumpPower end
+            if Humanoid.MoveDirection.Magnitude > 0.1 then
+                local boost = Humanoid.MoveDirection * Config.VelocityBoost
+                RootPart.Velocity = Vector3.new(
+                    math.clamp(RootPart.Velocity.X + boost.X, -targetSpeed * 1.4, targetSpeed * 1.4),
+                    RootPart.Velocity.Y,
+                    math.clamp(RootPart.Velocity.Z + boost.Z, -targetSpeed * 1.4, targetSpeed * 1.4)
+                )
+            end
+            if Config.AntiKick and (RootPart.Position - Camera.CFrame.Position).Magnitude > 25000 then
+                RootPart.CFrame = CFrame.new(Camera.CFrame.Position + Vector3.new(0, 10, 0))
+            end
+        end)
+    else
+        if not speedActive then return end
+        pcall(function()
+            Humanoid.WalkSpeed = originalWalkSpeed
+            Humanoid.JumpPower = originalJumpPower
+            RootPart.Velocity = Vector3.new(0, RootPart.Velocity.Y, 0)
+        end)
+        speedActive = false
+    end
+end)
+
+-- ==============================================
+-- ✅ AIM
+-- ==============================================
+local function GetAimPartAndOffset(character)
+    if not character then return nil, Vector3.new(0,0,0) end
+    local part, offset = nil, Vector3.new(0,0,0)
+    if Config.AimMode == "Head" then
+        part = character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        offset = Vector3.new(0, 0.4, 0)
+    elseif Config.AimMode == "Body" then
+        part = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+        offset = Vector3.new(0, 0.1, 0)
+    elseif Config.AimMode == "Foot" then
+        part = character:FindFirstChild("RightFoot") or character:FindFirstChild("LeftFoot") or character:FindFirstChild("HumanoidRootPart")
+        offset = Vector3.new(0, -0.3, 0)
+    elseif Config.AimMode == "GlassHead" then
+        part = character:FindFirstChild("Glasses") or character:FindFirstChild("RedGlasses") or character:FindFirstChild("HeadAccessory") or character:FindFirstChild("Head")
+        offset = Vector3.new(0, 0.6, 0)
+    elseif Config.AimMode == "GlassBody" then
+        part = character:FindFirstChild("RedHitbox") or character:FindFirstChild("BodyHitbox") or character:FindFirstChild("HumanoidRootPart")
+        offset = Vector3.new(0, 0.25, 0)
+    elseif Config.AimMode == "GlassFoot" then
+        part = character:FindFirstChild("RedFoot") or character:FindFirstChild("FootHitbox") or character:FindFirstChild("RightFoot") or character:FindFirstChild("LeftFoot")
+        offset = Vector3.new(0, -0.15, 0)
+    end
+    return part, offset
+end
+
+local function GetTarget()
+    local bestTarget, bestOffset, bestDist = nil, Vector3.new(0,0,0), math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character
+        if not char then continue end
+        local hum = char:FindFirstChild("Humanoid")
+        local part, offset = GetAimPartAndOffset(char)
+        if not hum or not part or hum.Health <= 0 then continue end
+        local dist = (RootPart.Position - part.Position).Magnitude
+        if dist > Config.AimRange then continue end
+        local ray = Ray.new(Camera.CFrame.Position, (part.Position - Camera.CFrame.Position).Unit * Config.AimRange)
+        local hit = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character})
+        if not hit or not hit:IsDescendantOf(char) then continue end
+        if dist < bestDist then
+            bestDist = dist
+            bestTarget = part
+            bestOffset = offset
+        end
+    end
+    return bestTarget, bestOffset
+end
+
+RunService.RenderStepped:Connect(function(dt)
+    if not Config.AimEnabled or not RootPart then return end
+    local target, offset = GetTarget()
+    if target then
+        Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position + offset), Config.AimSmooth * 10 * dt)
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(i)
+    if i.KeyCode == Config.AimKey then
+        Config.AimEnabled = not Config.AimEnabled
+    end
+end)
+
+-- ==============================================
+-- ✅ AUTO HỒI MÁU
+-- ==============================================
+local lastHealTime = 0
+local healAttempts = 0
+
+RunService.Heartbeat:Connect(function()
+    if not Config.AutoHeal or not Humanoid or Humanoid.Health <= 0 or not Character then return end
+    local currentHP = Humanoid.Health
+    local maxHP = Humanoid.MaxHealth
+    if currentHP >= maxHP or currentHP > (maxHP * Config.HealThreshold / 100) then
+        healAttempts = 0
+        return
+    end
+    if os.clock() - lastHealTime < Config.HealDelay then return end
+    local canHeal = true
+    if Config.CheckHealItem then
+        local tool = Character:FindFirstChildOfClass("Tool")
+        if not tool then canHeal = false
+        else
+            local name = tool.Name:lower()
+            canHeal = false
+            for _,w in ipairs(Config.HealItemNames) do if name:find(w) then canHeal = true break end end
+        end
+    end
+    if not canHeal then return end
+    lastHealTime = os.clock()
+    healAttempts += 1
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Config.HealKey, false, game)
+        task.wait(0.02)
+        VirtualInputManager:SendKeyEvent(false, Config.HealKey, false, game)
+        local eq = Character:FindFirstChildOfClass("Tool")
+        if eq then eq:Activate() if eq:FindFirstChild("RemoteEvent") then eq.RemoteEvent:FireServer() end end
+    end)
+    if healAttempts > 5 then lastHealTime = os.clock() + 3 healAttempts = 0 end
+end)
+
+-- ==============================================
+-- ✅ HITBOX
+-- ==============================================
+local originalData = {}
+local function ResetAllHitboxes()
+    for userId, data in pairs(originalData) do
+        if data.Character and data.Character:IsDescendantOf(Workspace) then
+            pcall(function()
+                if data.RootPart then
+                    data.RootPart.Size = data.OriginalRootSize
+                    data.RootPart.Transparency = data.OriginalRootTransparency
+                    data.RootPart.CanCollide = data.OriginalRootCanCollide
+                    data.RootPart.Color = Color3.new(0.64, 0.64, 0.64)
+                    data.RootPart.Material = Enum.Material.Plastic
+                end
+                if data.Head then
+                    data.Head.Size = data.OriginalHeadSize
+                    data.Head.Transparency = data.OriginalHeadTransparency
+                    data.Head.CanCollide = data.OriginalHeadCanCollide
+                    data.Head.Color = Color3.new(1, 1, 1)
+                    data.Head.Material = Enum.Material.Plastic
+                end
+                if data.Torso then
+                    data.Torso.Size = data.OriginalTorsoSize
+                    data.Torso.Transparency = data.OriginalTorsoTransparency
+                    data.Torso.CanCollide = data.OriginalTorsoCanCollide
+                    data.Torso.Color = Color3.new(0.8, 0.6, 0.4)
+                    data.Torso.Material = Enum.Material.Plastic
+                end
+            end)
+        end
+    end
+    table.clear(originalData)
+end
+
+RunService.Heartbeat:Connect(function()
+    if not Config.EnemyHitbox then ResetAllHitboxes() return end
+    local activeIds = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character if not char then continue end
+        local hum = char:FindFirstChild("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
+        local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        if not hum or not root or hum.Health <= 0 then continue end
+        activeIds[plr.UserId] = true
+        if not originalData[plr.UserId] then
+            originalData[plr.UserId] = {
+                Character = char, RootPart = root, OriginalRootSize = root.Size,
+                OriginalRootTransparency = root.Transparency, OriginalRootCanCollide = root.CanCollide,
+                Head = head, OriginalHeadSize = head and head.Size or Vector3.new(1,1,1),
+                OriginalHeadTransparency = head and head.Transparency or 0, OriginalHeadCanCollide = head and head.CanCollide or true,
+                Torso = torso, OriginalTorsoSize = torso and torso.Size or Vector3.new(2,2,1),
+                OriginalTorsoTransparency = torso and torso.Transparency or 0, OriginalTorsoCanCollide = torso and torso.CanCollide or true
+            }
+        end
+        pcall(function()
+            if root then
+                root.Size = Config.HitboxSize
+                root.Transparency = math.min(Config.HitboxTransparency, 0.9)
+                root.CanCollide = false
+                root.Color = Config.BoxColor
+                root.Material = Enum.Material.Neon
+            end
+            if head then
+                head.Size = Vector3.new(Config.HitboxSize.X * 0.8, Config.HitboxSize.Y * 0.8, Config.HitboxSize.Z * 0.8)
+                head.Transparency = math.min(Config.HitboxTransparency, 0.9)
+                head.CanCollide = false
+                head.Color = Config.BoxColor
+                head.Material = Enum.Material.Neon
+            end
+            if torso then
+                torso.Size = Vector3.new(Config.HitboxSize.X, Config.HitboxSize.Y * 0.9, Config.HitboxSize.Z)
+                torso.Transparency = math.min(Config.HitboxTransparency, 0.9)
+                torso.CanCollide = false
+                torso.Color = Config.BoxColor
+                torso.Material = Enum.Material.Neon
+            end
+        end)
+    end
+    for userId in pairs(originalData) do
+        if not activeIds[userId] then ResetAllHitboxes() originalData[userId] = nil end
+    end
+end)
+
+-- ==============================================
+-- ✅ AUTO ĐÁNH + SPIN + THANH MÁU
+-- ==============================================
+local autoAttack = false
+RunService.RenderStepped:Connect(function() if autoAttack and Character then local t = Character:FindFirstChildOfClass("Tool") if t then t:Activate() end end end)
+RunService.RenderStepped:Connect(function(dt) if Config.Spin and RootPart and Humanoid.Health > 0 then RootPart.CFrame *= CFrame.Angles(0, math.rad(Config.SpinSpeed) * dt, 0) end end)
+
+local HealthBars = {}
+local function ClearAllHealthBars()
+    for _, bar in pairs(HealthBars) do if bar and bar:IsDescendantOf(game) then bar:Destroy() end end
+    table.clear(HealthBars)
+end
+
+RunService.Heartbeat:Connect(function()
+    if not Config.HealthBar then ClearAllHealthBars() return end
+    local activeIds = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character if not char then continue end
+        local hum = char:FindFirstChild("Humanoid") local head = char:FindFirstChild("Head")
+        if not hum or not head or hum.Health <= 0 then continue end
+        activeIds[plr.UserId] = true
+        if not HealthBars[plr.UserId] then
+            local bg = Instance.new("BillboardGui")
+            bg.Adornee = head bg.Size = UDim2.new(0,60,0,10) bg.StudsOffset = Vector3.new(0,2.5,0) bg.AlwaysOnTop = true bg.Parent = char
+            local frame = Instance.new("Frame", bg) frame.Size = UDim2.new(1,0,1,0) frame.BackgroundColor3 = Color3.new(0.15,0.15,0.15)
+            local fill = Instance.new("Frame", frame) fill.Size = UDim2.new(1,0,1,0) fill.BackgroundColor3 = Color3.new(0,0.85,0)
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0,4)
+            Instance.new("UICorner", fill).CornerRadius = UDim.new(0,4)
+            HealthBars[plr.UserId] = bg
+        end
+        local pct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+        local fill = HealthBars[plr.UserId]:FindFirstChild("Frame"):FindFirstChild("Frame")
+        fill.Size = UDim2.new(pct,0,1,0)
+        fill.BackgroundColor3 = pct>0.6 and Color3.new(0,0.85,0) or pct>0.3 and Color3.new(1,0.65,0) or Color3.new(0.85,0,0)
+    end
+    for id in pairs(HealthBars) do if not activeIds[id] then HealthBars[id]:Destroy() HealthBars[id] = nil end end
+end)
+
+-- ==============================================
+-- ✅ GIAO DIỆN RAINBOW - GIỚI THIỆU Ở CUỐI
+-- ==============================================
+local SG = Instance.new("ScreenGui")
+SG.Name = "KevinHub"
+SG.ResetOnSpawn = false
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+local ok, err = pcall(function() SG.Parent = CoreGui end)
+if not ok then SG.Parent = LocalPlayer:WaitForChild("PlayerGui", 10) end
+
+-- Nút mở menu
+local ToggleBtn = Instance.new("ImageButton")
+ToggleBtn.Size = UDim2.new(0, 60, 0, 60)
+ToggleBtn.Position = UDim2.new(0.91, 0, 0.02, 0)
+ToggleBtn.BackgroundTransparency = 1
+ToggleBtn.Image = "rbxassetid://13242589745"
+ToggleBtn.ScaleType = Enum.ScaleType.Fit
+ToggleBtn.Parent = SG
+
+local BorderBtn = Instance.new("Frame")
+BorderBtn.Size = UDim2.new(1, 6, 1, 6)
+BorderBtn.Position = UDim2.new(0, -3, 0, -3)
+BorderBtn.BackgroundTransparency = 1
+BorderBtn.BorderSizePixel = 2
+BorderBtn.ZIndex = -1
+BorderBtn.Parent = ToggleBtn
+Instance.new("UICorner", BorderBtn).CornerRadius = UDim.new(1, 0)
+
+-- Menu chính
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0, 520, 0, 620)
+Main.Position = UDim2.new(0.1, 0, 0.1, 0)
+Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Main.Visible = true
+Main.Parent = SG
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 8)
+
+local BorderMain = Instance.new("Frame")
+BorderMain.Size = UDim2.new(1, 6, 1, 6)
+BorderMain.Position = UDim2.new(0, -3, 0, -3)
+BorderMain.BackgroundTransparency = 1
+BorderMain.BorderSizePixel = 2
+BorderMain.ZIndex = -1
+BorderMain.Parent = Main
+Instance.new("UICorner", BorderMain).CornerRadius = UDim.new(0, 8)
+
+-- Thanh tiêu đề
+local Title = Instance.new("Frame")
+Title.Size = UDim2.new(1, 0, 0, 50)
+Title.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+Title.Parent = Main
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 8)
+
+-- Tiêu đề KEVIN hiệu ứng 7 màu
+local TitleTxt = Instance.new("TextLabel")
+TitleTxt.Size = UDim2.new(1, -20, 1, 0)
+TitleTxt.Position = UDim2.new(0, 10, 0, 0)
+TitleTxt.Text = "KEVIN"
+TitleTxt.Font = Enum.Font.GothamBold
+TitleTxt.TextSize = 26
+TitleTxt.BackgroundTransparency = 1
+TitleTxt.Parent = Title
+
+-- Nội dung chức năng
+local Content = Instance.new("ScrollingFrame")
+Content.Size = UDim2.new(1, -20, 1, -60)
+Content.Position = UDim2.new(0, 10, 0, 55)
+Content.BackgroundTransparency = 1
+Content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Content.ScrollBarThickness = 4
+Content.Parent = Main
+
+local List = Instance.new("UIListLayout")
+List.Padding = UDim.new(0, 12)
+List.Parent = Content
+
+-- Hiệu ứng đổi màu 7 màu liên tục
+RunService.RenderStepped:Connect(function()
+    local hue = tick() % 10 / 10
+    local rainbowColor = Color3.fromHSV(hue, 1, 1)
+    BorderBtn.BorderColor3 = rainbowColor
+    BorderMain.BorderColor3 = rainbowColor
+    TitleTxt.TextColor3 = rainbowColor
+end)
+
+-- Kéo thả menu
+local drag, startPos, offset = false
+Title.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        drag = true
+        startPos = Main.Position
+        offset = i.Position
+        i:Capture()
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
+        Main.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + (i.Position.X - offset.X),
+            startPos.Y.Scale,
+            startPos.Y.Offset + (i.Position.Y - offset.Y)
+        )
+    end
+end)
+UserInputService.InputEnded:Connect(function() drag = false end)
+
+-- Mở/đóng menu
+local MenuOpen = true
+ToggleBtn.MouseButton1Click:Connect(function()
+    MenuOpen = not MenuOpen
+    Main.Visible = MenuOpen
+end)
+
+-- Tạo nút bật/tắt
+local function AddToggle(name, get, set)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, 0, 0, 42)
+    Btn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    Btn.AutoButtonColor = false
+    Btn.LayoutOrder = #Content:GetChildren()
+    Btn.Parent = Content
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -60, 1, 0)
+    Label.Position = UDim2.new(0, 12, 0, 0)
+    Label.Text = name
+    Label.Font = Enum.Font.Gotham
+    Label.TextColor3 = Color3.new(1, 1, 1)
+    Label.TextSize = 15
+    Label.BackgroundTransparency = 1
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = Btn
+
+    local Switch = Instance.new("Frame")
+    Switch.Size = UDim2.new(0, 40, 0, 22)
+    Switch.Position = UDim2.new(1, -50, 0.5, -11)
+    Switch.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    Switch.Parent = Btn
+    Instance.new("UICorner", Switch).CornerRadius = UDim.new(1, 0)
+
+    local Dot = Instance.new("Frame")
+    Dot.Size = UDim2.new(0, 18, 0, 18)
+    Dot.Position = UDim2.new(0, 2, 0.5, -9)
+    Dot.BackgroundColor3 = Color3.new(1, 1, 1)
+    Dot.Parent = Switch
+    Instance.new("UICorner", Dot).CornerRadius = UDim.new(1, 0)
+
+    local function Update()
+        if get() then
+            Switch.BackgroundColor3 = Color3.fromRGB(45, 180, 80)
+            Dot.Position = UDim2.new(1, -20, 0.5, -9)
+        else
+            Switch.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+            Dot.Position = UDim2.new(0, 2, 0.5, -9)
+        end
+    end
+    Update()
+    Btn.MouseButton1Click:Connect(function() set(not get()) Update() end)
+end
+
+-- Nút chuyển chế độ AIM
+local function AddAimModeSelector()
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, 0, 0, 42)
+    Btn.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+    Btn.AutoButtonColor = false
+    Btn.LayoutOrder = #Content:GetChildren()
+    Btn.Parent = Content
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -10, 1, 0)
+    Label.Position = UDim2.new(0, 12, 0, 0)
+    Label.Font = Enum.Font.GothamBold
+    Label.TextColor3 = Color3.new(1, 1, 1)
+    Label.TextSize = 15
+    Label.BackgroundTransparency = 1
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = Btn
+
+    local function UpdateText()
+        local t = {
+            Head = "🎯 AIM: ĐẦU",
+            Body = "🎯 AIM: THÂN",
+            Foot = "🎯 AIM: CHÂN",
+            GlassHead = "🎯 AIM: KÍNH ĐẦU",
+            GlassBody = "🎯 AIM: KÍNH THÂN",
+            GlassFoot = "🎯 AIM: KÍNH CHÂN"
+        }
+        Label.Text = t[Config.AimMode] or "🎯 AIM: ĐẦU"
+    end
+    UpdateText()
+
+    Btn.MouseButton1Click:Connect(function()
+        local order = {"Head", "Body", "Foot", "GlassHead", "GlassBody", "GlassFoot"}
+        local idx = table.find(order, Config.AimMode) or 1
+        Config.AimMode = order[idx % #order + 1]
+        UpdateText()
+    end)
+end
+
+-- Thêm chức năng
+AddToggle(" SPEED LỎ", function() return Config.SpeedEnabled end, function(v) Config.SpeedEnabled = v end)
+AddToggle(" AIM NHẮM MỤC TIÊU", function() return Config.AimEnabled end, function(v) Config.AimEnabled = v end)
+AddAimModeSelector()
+AddToggle(" AUTO ĐÁNH", function() return autoAttack end, function(v) autoAttack = v end)
+AddToggle(" HITBOX ", function() return Config.EnemyHitbox end, function(v) Config.EnemyHitbox = v end)
+AddToggle(" AUTO HỒI MÁU (<90%)", function() return Config.AutoHeal end, function(v) Config.AutoHeal = v end)
+AddToggle(" SPIN QUAY NGƯỜI", function() return Config.Spin end, function(v) Config.Spin = v end)
+AddToggle(" THANH MÁU", function() return Config.HealthBar end, function(v) Config.HealthBar = v end)
+
+-- === PHẦN GIỚI THIỆU ĐƯỢC ĐẶT Ở CUỐI ===
+local InfoFrame = Instance.new("Frame")
+InfoFrame.Size = UDim2.new(1, 0, 0, 70)
+InfoFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+InfoFrame.LayoutOrder = 999
+InfoFrame.Parent = Content
+Instance.new("UICorner", InfoFrame).CornerRadius = UDim.new(0, 6)
+
+local DiscordTxt = Instance.new("TextLabel")
+DiscordTxt.Size = UDim2.new(1, -10, 0, 30)
+DiscordTxt.Position = UDim2.new(0, 5, 0, 5)
+DiscordTxt.Text = "Discord: thieugia2011"
+DiscordTxt.Font = Enum.Font.GothamSemibold
+DiscordTxt.TextSize = 16
+DiscordTxt.BackgroundTransparency = 1
+DiscordTxt.Parent = InfoFrame
+
+local TiktokTxt = Instance.new("TextLabel")
+TiktokTxt.Size = UDim2.new(1, -10, 0, 30)
+TiktokTxt.Position = UDim2.new(0, 5, 0, 35)
+TiktokTxt.Text = "Tiktok: kevin999991"
+TiktokTxt.Font = Enum.Font.GothamSemibold
+TiktokTxt.TextSize = 16
+TiktokTxt.BackgroundTransparency = 1
+TiktokTxt.Parent = InfoFrame
+
+-- Thêm hiệu ứng rainbow cho phần giới thiệu
+RunService.RenderStepped:Connect(function()
+    local hue = tick() % 10 / 10
+    local rainbowColor = Color3.fromHSV(hue, 1, 1)
+    DiscordTxt.TextColor3 = rainbowColor
+    TiktokTxt.TextColor3 = rainbowColor
+end)
+
+print("✅ KEVIN RAINBOW HUB - GIỚI THIỆU Ở CUỐI MENU!")
